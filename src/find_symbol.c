@@ -8,69 +8,67 @@
 #include "../include/my.h"
 #include "../include/shell_struct.h"
 
-void get_path_ocmd(shell_t *shell)
+static void exec_from_shell_path(shell_t *shell)
 {
-    int a = 0;
-    for (; shell->env[a] != NULL; a++) {
-        if (my_strncmp(shell->env[a], "PATH=", 5) == 0)
+    int env_index = 0;
+    int saved_errno = ENOENT;
+    char **path;
+    char **path_parts;
+
+    for (; shell->env[env_index] != NULL; env_index++) {
+        if (my_strncmp(shell->env[env_index], "PATH=", 5) == 0)
             break;
     }
-    char **path = my_str_to_word_array(shell->env[a], "=");
-        if (path == NULL)
-            return;
-    char **path2 = my_str_to_word_array(path[1], ":");
-    if (path2 == NULL)
+    if (shell->env[env_index] == NULL) {
+        errno = saved_errno;
         return;
-    for (int j = 0; path2[j] != NULL; j++) {
-        shell->tmp = my_strconcat(path2[j],
-        my_strconcat("/", shell->m_cmds[0]));
-        if (access(shell->tmp, F_OK) == 0) {
-            return;
-        }
     }
+    path = my_str_to_word_array(shell->env[env_index], "=");
+    if (path == NULL)
+        return;
+    path_parts = my_str_to_word_array(path[1], ":");
+    if (path_parts == NULL)
+        return;
+    for (int index = 0; path_parts[index] != NULL; index++) {
+        shell->tmp = my_strconcat(path_parts[index],
+            my_strconcat("/", shell->m_cmds[0]));
+        if (execve(shell->tmp, shell->m_cmds, shell->env) == -1)
+            saved_errno = errno;
+    }
+    errno = saved_errno;
 }
 
 int all_bin_ocmd(shell_t *shell)
 {
-    int a , exc, signal = 0; shell->tmp = shell->one_cmd;
-    if (access(shell->tmp, F_OK) != 0) {
-        my_putstr_error(shell->tmp);
-        my_putstr_error(": Command not found.\n");
-        exit(1);
-    } else {
-        a = fork();
-        if (a == 0) {
-            exc = execve(shell->one_cmd, shell->m_cmds, shell->env);
-        } else {
-            waitpid(a, &signal, 0);
-            siginit(signal);
-            return 0;
-        }
-        if (exc == -1) {
-            my_putstr_error(shell->cmd[0]);
-            my_putstr_error(": Permission denied.\n");
+    int child;
+    int signal = 0;
+
+    child = fork();
+    if (child == 0) {
+        if (execve(shell->one_cmd, shell->m_cmds, shell->env) == -1) {
+            execute_this_ext(shell, -1);
             exit(1);
         }
-    }return 0;
+    }
+    waitpid(child, &signal, 0);
+    siginit(signal);
+    return 0;
 }
 
 int execute_this_ocmd(shell_t *shell)
 {
-    get_path_ocmd(shell);
-    if (shell->tmp == NULL) {
-        return 1;
-    }
     int sig = 0;
     int clone = fork();
+
     if (clone == 0) {
-        execve(shell->tmp, shell->m_cmds, shell->env);
+        exec_from_shell_path(shell);
+        if (execute_this_ext(shell, -1) == 1)
+            exit(1);
     } else {
         waitpid(clone, &sig, 0);
         siginit(sig);
         return 0;
     }
-    if (execute_this_ext(shell, clone) == 1)
-        exit(1);
     return 1;
 }
 
